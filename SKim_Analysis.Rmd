@@ -1,0 +1,441 @@
+---
+title: "How Audio Features of a Song Affect its Popularity"
+author: Soomin Kim
+output: pdf_document
+---
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(spotifyr)
+library(writexl)
+library(readxl)
+```
+
+# Load and clean dataset
+```{r}
+data0 <- read_xlsx("data.xlsx")
+
+data0$track.album.release_date <- substr(data0$track.album.release_date, 0, 4) # keep Year only
+data0$track.album.release_date <- as.integer(data0$track.album.release_date) # make date numeric
+data0$track.duration_ms <- round(data0$track.duration_ms / 1000) # convert from miliseconds to seconds
+
+names(data0)[2] <- "song"
+names(data0)[3] <- "year"
+names(data0)[4] <- "popularity"
+names(data0)[17] <- "duration"
+
+data <- data0 %>% distinct(track.id, .keep_all = TRUE) # remove duplicate songs
+data = select(data, -1) # remove track id
+
+data1 <- data[!(data$year < 1950),] # remove songs pre-1950 (7 songs)
+data1 <- na.omit(data1) # omit NAs (1 song)
+data1$year <- as.numeric(data1$year)
+data1 = select(data1, -c("key_name", "mode_name"))
+```
+
+# Recode variables and create new ones
+```{r}
+# Recode all continuous independent variables as whole numbers between 1-100
+data1$danceability <- round(data1$danceability*100, 0)
+data1$energy <- round(data1$energy *100, 0)
+data1$speechiness <- round(data1$speechiness *100, 0)
+data1$acousticness <- round(data1$acousticness *100, 0)
+data1$instrumentalness <- round(data1$instrumentalness *100, 0)
+data1$liveness <- round(data1$liveness *100, 0)
+data1$valence <- round(data1$valence *100, 0)
+data1$loudness <- round(data1$loudness, 0)
+data1$tempo <- round(data1$tempo, 0)
+
+# Create a factor variable, decades, using Year variable
+# 1 = 50s, 2 = 60s, 3 = 70s, 4 = 80s, 5 = 90s, 6 = 00s, 7 = 10s, 8 = 20s
+data1$decades <- ifelse(data1$year < 1960, 1,
+                     ifelse(data1$year >= 1960 & data1$year < 1970, 2, 
+                       ifelse(data1$year >= 1970 & data1$year <1980, 3,
+                              ifelse(data1$year >=1980 & data1$year <1990, 4,
+                                     ifelse(data1$year >=1990 & data1$year <2000, 5,
+                                            ifelse(data1$year >=2000 & data1$year <2010,6,
+                                                   ifelse(data1$year >= 2010 & data1$year <2020, 7, 
+                                                          ifelse(data1$year > 2019, 8, NA))))))))
+
+data1$decades <- factor(data1$decades, levels = c(1, 2, 3, 4, 5, 6, 7, 8)) # set baseline as 1 or 1950s
+
+# Recode Tempo variable as a factor variable into three levels (low tempo = <102; med tempo = 102-120; high tempo = >120)
+data1$tempo_cat[data1$tempo < 102] <- "slow"
+data1$tempo_cat[data1$tempo > 101 & data1$tempo < 121] <- "medium"
+data1$tempo_cat[data1$tempo > 120] <- "fast"
+data1$tempo_factor <- factor(data1$tempo_cat,
+                             levels = c("medium","slow","fast"))
+
+# Recode Key_Mode into a factor key variable ranging from 0-24
+data1$key_all <- NA
+data1$key_all[data1$key_mode == "C major"] <- 0
+data1$key_all[data1$key_mode == "C minor"] <- 1
+data1$key_all[data1$key_mode == "C# major"] <- 2
+data1$key_all[data1$key_mode == "C# minor"] <- 3
+data1$key_all[data1$key_mode == "D major"] <- 4
+data1$key_all[data1$key_mode == "D minor"] <- 5
+data1$key_all[data1$key_mode == "D# major"] <- 6
+data1$key_all[data1$key_mode == "D# minor"] <- 7
+data1$key_all[data1$key_mode == "E major"] <- 8
+data1$key_all[data1$key_mode == "E minor"] <- 9
+data1$key_all[data1$key_mode == "F major"] <- 10
+data1$key_all[data1$key_mode == "F minor"] <- 11
+data1$key_all[data1$key_mode == "F# major"] <- 12
+data1$key_all[data1$key_mode == "F# minor"] <- 13
+data1$key_all[data1$key_mode == "G major"] <- 14
+data1$key_all[data1$key_mode == "G minor"] <- 15
+data1$key_all[data1$key_mode == "G# major"] <- 16
+data1$key_all[data1$key_mode == "G# minor"] <- 17
+data1$key_all[data1$key_mode == "A major"] <- 18
+data1$key_all[data1$key_mode == "A minor"] <- 19
+data1$key_all[data1$key_mode == "A# major"] <- 20
+data1$key_all[data1$key_mode == "A# minor"] <- 21
+data1$key_all[data1$key_mode == "B major"] <- 22
+data1$key_all[data1$key_mode == "B minor"] <- 23
+data1$key_all <- factor(data1$key_all,
+                        levels = c("0","1","2","3","4","5","6","7","8","9","10","11","12",
+                              "13","14","15","16","17","18","19","20","21","22","23"))
+
+# Check what is the most used key in the data
+key_all_data <- data1 %>% 
+  group_by(key_all) %>% 
+  summarise(n_appearance = n()) %>% 
+  arrange(desc(n_appearance)) # C major is the most used key
+
+```
+
+# Remove outliers in each IV
+```{r}
+#boxplot(data1$danceability)
+danceabilityout <- boxplot(data1$danceability, plot = FALSE)$out
+data1 <- data1[-which(data1$danceability %in% danceabilityout),]
+
+#boxplot(data1$energy) # no outlier
+
+#boxplot(data1$loudness)
+loudnessout <- boxplot(data1$loudness, plot = FALSE)$out
+data1 <- data1[-which(data1$loudness %in% loudnessout),]
+
+#boxplot(data1$speechiness)
+speechinessout <- boxplot(data1$speechiness, plot = FALSE)$out
+data1 <- data1[-which(data1$speechiness %in% speechinessout),]
+
+#boxplot(data1$acousticness) # no outlier
+
+#boxplot(data1$instrumentalness)
+instrumentalnessout <- boxplot(data1$instrumentalness, plot = FALSE)$out
+data1 <- data1[-which(data1$instrumentalness %in% instrumentalnessout),] # remaining values are all zero bc was a very skewed data; so will not use instrumentalness in the model
+
+#boxplot(data1$liveness)
+livenessout <- boxplot(data1$liveness, plot = FALSE)$out
+data1 <- data1[-which(data1$liveness %in% livenessout),]
+
+#boxplot(data1$valence) # no outlier
+
+#boxplot(data1$tempo)
+tempoout <- boxplot(data1$tempo, plot = FALSE)$out
+data1 <- data1[-which(data1$tempo %in% tempoout),]
+
+#boxplot(data1$duration)
+durationout <- boxplot(data1$duration, plot = FALSE)$out
+data1 <- data1[-which(data1$duration %in% durationout),]
+
+# remove unnecessary variables for analysis
+data1 = select(data1, -c("year", "key", "mode", "tempo","key_mode","tempo_cat"))
+# write_xlsx(data1, "data_cleaned.xlsx")
+```
+
+# Multivariate Linear Regression
+```{r}
+linear1 <- lm(popularity~
+                    danceability + speechiness + valence +
+                    loudness + energy +
+                    duration + liveness + acousticness + 
+                    tempo_factor + decades + key_all, data1)
+summary(linear1) # this model gave the highest R-squared value of 0.1049
+
+# baseline for decades is 1950s (decade 0)
+# baseline for key is 0 or C major
+# baseline for tempo_factor is medium
+```
+
+# Use VIF to test for multicollinearity
+```{r}
+library(car)
+vif(linear1)
+# since VIF < 5, no multicollinearity problem
+```
+
+# Create a stargazer table of the multivariate linear regression model
+```{r}
+library(stargazer)
+stargazer(linear1, type = "text", title = "Change in Pr(Song Popularity) based on Audio Features",
+          covariate.labels = c("Danceability", "Speechiness", "Valence",  
+                               "Loudness", "Energy", "Duration", "Liveness", "Acousticness",
+                               "Slow Tempo","Fast Tempo",
+                               "1960s","1970s","1980s","1990s","2000s","2010s","2020s",
+                               "C minor", "C# major", "C# minor",
+                               "D major","D minor","D# major","D# minor","E major","E minor","F major","F minor",
+                               "F# major","F# minor","G major","G minor","G# major","G# minor",
+                               "A major","A minor","A# major","A# minor","B major","B minor",
+                               "Constant"),
+          dep.var.labels = c("Change in Pr(Song Popularity)"),
+          intercept.bottom = TRUE,
+          notes.append = FALSE,
+          header = FALSE)
+```
+
+# Create a stargazer table (of stat.sig. predictors) of the multivariate linear regression model.
+```{r}
+stargazer(linear1, type = "text", title = "Table 2: Change in Pr(Song Popularity) based on Statistically Significant Audio Features",
+          covariate.labels = c("Danceability", "Speechiness", "Valence", 
+                               "Loudness", "Energy", "Duration", 
+                               "Slow Tempo", "Fast Tempo", "2000s", "2010s","F minor", "Constant"),
+          dep.var.labels = c("Change in Pr(Song Popularity)"),
+          keep = c("danceability", "speechiness", "valence",
+                   "loudness","energy", "duration", 
+                   "tempo_factorslow", "tempo_factorfast", "decades6", "decades7","key_all11", "Constant"),
+          intercept.bottom = TRUE,
+          notes.append = FALSE,
+          header = FALSE,
+          star.char = c("***"), star.cutoffs = c(0.01),
+          notes = c("***p < 0.01"),
+          no.space = TRUE)
+```
+
+# Check linearity of the data, normality of residuals, homogeneity of residuals variance
+```{r}
+plot(linear1)
+```
+
+# Check heteroskadasticity
+```{r}
+library(lmtest)
+bptest(linear1)
+
+## Ho: Variances are equal across groups
+## Ha: Variances are unequal for at least two groups
+# result: There is a p-value<2.2e-16 (less that a significance level of 0.05), therefore we can reject the null hypothesis that the variance of the residuals is constant and infer that heteroscedasticity is indeed present, thereby confirming our graphical inference.
+
+library(sandwich)
+vcovHC(linear1) # RESCALED SO THAT THE VARIANCE IS THE SAME ACROSS X
+diag(vcovHC(linear1)) # diagonals - heteroskedasticity-consistent standard errors
+sqrt(diag(vcovHC(linear1))) # to see SE, compare to these SE in original
+
+summary(linear1)
+coeftest(linear1, vcov = vcovHC(linear1, "HC1"))
+# no change in statistically significant predictors, so keep the original 'linear1' model
+```
+
+# Use the Zelig function to produce several graphs showing the expected values of song popularity by a function of various significant audio features - danceability, speechineess, valence, energy, loudness, decades, keys, tempo - including a 95% confidence interval
+
+## Danceability as IV
+```{r}
+library(Zelig)
+linear1_zelig <- zelig(popularity~
+                    danceability + speechiness + valence + loudness + energy +
+                    duration + liveness + acousticness + 
+                    tempo_factor + decades + key_all,
+              model = "ls", data = data1, cite = FALSE)
+coefficients(linear1_zelig)
+get_se(linear1_zelig)
+
+zelig_new <- setx(linear1_zelig, danceability = c(0,20,40,60,80,100)) # set values
+zelig_sim <- sim(zelig_new); zelig_sim # simulate
+simdat_zelig <- zelig_qi_to_df(zelig_sim); dim(simdat_zelig)
+zelig_tab <- data.frame(do.call("rbind", tapply(simdat_zelig$expected_value, simdat_zelig$danceability, quantile, c(.025,.5,.975)))) # lower bound, median, upper bound
+
+# plot with confidence intervals
+ggplot(zelig_tab) +
+  geom_pointrange(aes(x = c(0,20,40,60,80,100), y = X50., ymin = X2.5., ymax = X97.5.,
+                      col = 564)) +
+  labs(x = "Danceability", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Danceability") +
+  theme_classic() +
+  theme(legend.position = "none")
+#ggsave("danceability.png", width = 6, height = 6)
+
+# shaded area plot
+zelig_tab$danceplot <- c(0,20,40,60,80,100)
+
+ggplot(zelig_tab, aes(x=danceplot)) +
+  geom_line(aes(y = X50.), size = 1, color = "blue") +
+  geom_ribbon(aes(ymin = X2.5., ymax = X97.5.), alpha = 0.3, linetype = 2) +
+  labs(x = "Danceability", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Danceability") +
+  theme_classic()
+
+#ggsave("dance2.png", width = 6, height=6)
+```
+
+## Speechineess as IV
+```{r}
+zelig_new <- setx(linear1_zelig,
+                  speechiness = c(0, 3, 6, 9, 12))
+zelig_sim <- sim(zelig_new); zelig_sim
+simdat_zelig <- zelig_qi_to_df(zelig_sim); dim(simdat_zelig)
+zelig_tab4 <- data.frame(do.call("rbind", tapply(simdat_zelig$expected_value, simdat_zelig$speechiness, quantile, c(.025,.5,.975))))
+
+# plot with confidence intervals
+ggplot(zelig_tab4) +
+  geom_pointrange(aes(x = c(0, 3, 6, 9, 12), 
+                      y = X50., ymin = X2.5., ymax = X97.5.,
+                      col = 564)) +
+  labs(x = "Speechiness", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Speechiness") +
+  theme_classic() +
+  theme(legend.position = "none")
+#ggsave("speechiness.png", width = 6, height = 6)
+
+# shaded area plot
+zelig_tab4$speechplot <- c(0, 3, 6, 9, 12)
+ggplot(zelig_tab4, aes(x=speechplot)) +
+  geom_line(aes(y = X50.), size = 1, color = "blue") +
+  geom_ribbon(aes(ymin = X2.5., ymax = X97.5.), alpha = 0.3, linetype = 2) +
+  labs(x = "Speechiness", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Speechiness") +
+  theme_classic()
+
+#ggsave("speechiness2.png", width = 6, height = 6)
+```
+
+## Valence as IV
+```{r}
+zelig_new <- setx(linear1_zelig,
+                  valence = c(0, 20, 40, 60, 80, 100))
+zelig_sim <- sim(zelig_new); zelig_sim
+simdat_zelig <- zelig_qi_to_df(zelig_sim); dim(simdat_zelig)
+zelig_tab3 <- data.frame(do.call("rbind", tapply(simdat_zelig$expected_value, simdat_zelig$valence, quantile, c(.025,.5,.975))))
+
+# plot with confidence intervals
+ggplot(zelig_tab3) +
+  geom_pointrange(aes(x = c(0, 20, 40, 60, 80, 100), 
+                      y = X50., ymin = X2.5., ymax = X97.5.,
+                      col = 564)) +
+  labs(x = "Valence", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Valence") +
+  theme_classic() +
+  theme(legend.position = "none")
+#ggsave("valence.png", width = 6, height = 6)
+
+# shaded area plot
+zelig_tab3$valenceplot <- c(0, 20, 40, 60, 80, 100)
+
+ggplot(zelig_tab3, aes(x=valenceplot)) +
+  geom_line(aes(y = X50.), size = 1, color = "blue") +
+  geom_ribbon(aes(ymin = X2.5., ymax = X97.5.), alpha = 0.3, linetype = 2) +
+  labs(x = "Valence", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Valence") +
+  theme_classic()
+
+#ggsave("valence2.png", width = 6, height = 6)
+```
+
+## Energy as IV
+```{r}
+zelig_new <- setx(linear1_zelig, energy = c(20, 40, 60, 80, 100))
+zelig_sim <- sim(zelig_new); zelig_sim
+simdat_zelig <- zelig_qi_to_df(zelig_sim); dim(simdat_zelig)
+zelig_tab <- data.frame(do.call("rbind", tapply(simdat_zelig$expected_value, simdat_zelig$energy, quantile, c(.025,.5,.975))))
+
+# plot with confidence intervals
+ggplot(zelig_tab) +
+  geom_pointrange(aes(x = c(20, 40, 60, 80, 100), y = X50., ymin = X2.5., ymax = X97.5.,
+                      col = 564)) +
+  labs(x = "Energy", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Energy") +
+  theme_classic() +
+  theme(legend.position = "none")
+#ggsave("energy.png", width = 6, height = 6)
+
+# shaded area plot
+zelig_tab$energyplot <- c(20, 40, 60, 80, 100)
+
+ggplot(zelig_tab, aes(x=energyplot)) +
+  geom_line(aes(y = X50.), size = 1, color = "blue") +
+  geom_ribbon(aes(ymin = X2.5., ymax = X97.5.), alpha = 0.3, linetype = 2) +
+  labs(x = "Energy", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Energy") +
+  theme_classic()
+#ggsave("energy2.png", width = 6, height=6)
+```
+
+## Loudness as IV
+```{r}
+zelig_new <- setx(linear1_zelig, loudness = c(-12, -9, -6, -3, 0))
+zelig_sim <- sim(zelig_new); zelig_sim
+simdat_zelig <- zelig_qi_to_df(zelig_sim); dim(simdat_zelig)
+zelig_tab <- data.frame(do.call("rbind", tapply(simdat_zelig$expected_value, simdat_zelig$loudness, quantile, c(.025,.5,.975))))
+
+# plot with confidence intervals
+ggplot(zelig_tab) +
+  geom_pointrange(aes(x = c(-12, -9, -6, -3, 0), y = X50., ymin = X2.5., ymax = X97.5.,
+                      col = 564)) +
+  labs(x = "Loudness (dB)", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Loudness") +
+  theme_classic() +
+  theme(legend.position = "none")
+#ggsave("loudness.png", width = 6, height = 6)
+
+# shaded area plot
+zelig_tab$loudnessplot <- c(-12, -9, -6, -3, 0)
+
+ggplot(zelig_tab, aes(x=loudnessplot)) +
+  geom_line(aes(y = X50.), size = 1, color = "blue") +
+  geom_ribbon(aes(ymin = X2.5., ymax = X97.5.), alpha = 0.3, linetype = 2) +
+  labs(x = "Loudness (dB)", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Loudness") +
+  theme_classic()
+#ggsave("loudness2.png", width = 6, height=6)
+```
+
+## Decade as IV
+```{r}
+zelig_new <- setx(linear1_zelig,
+                  decades = c("1", "2","3","4","5","6","7","8"))
+zelig_sim <- sim(zelig_new); zelig_sim
+simdat_zelig <- zelig_qi_to_df(zelig_sim); dim(simdat_zelig)
+zelig_tab2 <- data.frame(do.call("rbind", tapply(simdat_zelig$expected_value, simdat_zelig$decades, quantile, c(.025,.5,.975))))
+
+# plot with confidence intervals
+ggplot(zelig_tab2) +
+  geom_pointrange(aes(x = c("1950s", "1960s", "1970s","1980s","1990s","2000s","2010s","2020s"), 
+                      y = X50., ymin = X2.5., ymax = X97.5.,
+                      col = 564)) +
+  labs(x = "Decades", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Decades") +
+  theme_classic() +
+  theme(legend.position = "none")
+#ggsave("decades.png", width = 6, height = 6)
+```
+
+## Keys as IV
+```{r}
+zelig_new <- setx(linear1_zelig,
+                  key_all = c("0","1","2","3","4","5","6","7","8","9","10","11","12",
+                              "13","14","15","16","17","18","19","20","21","22","23"))
+zelig_sim <- sim(zelig_new); zelig_sim
+simdat_zelig <- zelig_qi_to_df(zelig_sim); dim(simdat_zelig)
+zelig_tab4 <- data.frame(do.call("rbind", tapply(simdat_zelig$expected_value, simdat_zelig$key_all, quantile, c(.025,.5,.975))))
+
+# plot with confidence intervals
+ggplot(zelig_tab4) +
+  geom_pointrange(aes(x = c("C","Cm","C#","C#m","D","Dm","D#","D#m","E","Em",
+                            "F","Fm","F#","F#m","G","Gm","G#","G#m","A","Am","A#","A#m","B","Bm"), 
+                      y = X50., ymin = X2.5., ymax = X97.5.,
+                      col = 564)) +
+  labs(x = "Keys", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Keys") +
+  theme_classic() +
+  theme(legend.position = "none")
+#ggsave("key.png", width = 6, height = 6)
+```
+
+## Tempo as IV
+```{r}
+zelig_new <- setx(linear1_zelig,
+                  tempo_factor = c("medium", "slow","fast"))
+zelig_sim <- sim(zelig_new); zelig_sim
+simdat_zelig <- zelig_qi_to_df(zelig_sim); dim(simdat_zelig)
+zelig_tab4 <- data.frame(do.call("rbind", tapply(simdat_zelig$expected_value, simdat_zelig$tempo_factor, quantile, c(.025,.5,.975))))
+
+# plot with confidence intervals
+ggplot(zelig_tab4) +
+  geom_pointrange(aes(x = c("Medium", "Slow","Fast"), 
+                      y = X50., ymin = X2.5., ymax = X97.5.,
+                      col = 564)) +
+  labs(x = "Tempo", y = "Expected Value of Song Popularity", title = "Expected(Song Popularity) by Tempo") +
+  theme_classic() +
+  theme(legend.position = "none")
+#ggsave("tempo.png", width = 6, height = 6)
+```
